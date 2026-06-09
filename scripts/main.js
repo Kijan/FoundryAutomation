@@ -185,8 +185,8 @@ async function onPreAttackRoll(workflow) {
 // ============================================================
 
 async function onPreDamageRoll(workflow) {
-  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id: ${workflow.id}, frenzyPending: ${actor.getFlag("world", "barbarianFrenzyPending")}, hitTargets: ${workflow.hitTargets?.size}`);
   const actor = workflow.actor;
+  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id: ${workflow.id}, frenzyPending: ${actor.getFlag("world", "barbarianFrenzyPending")}, hitTargets: ${workflow.hitTargets?.size}`);
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
 
