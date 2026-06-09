@@ -1,12 +1,52 @@
 // ============================================================
-// Nisras Barbarian Automation v1.2
+// Nisras Barbarian Automation v1.3
 // ============================================================
 
 const MODULE_ID = "nisras-automation";
 const ACTOR_NAME = "Nisras";
 
-// Guard gegen mehrfache Ausführung pro Workflow
-const processedWorkflows = new Set();
+// ============================================================
+// Zustands-Variablen (im Modul-Scope, kein Server-Roundtrip)
+// ============================================================
+
+const state = {
+  // Welcher Workflow läuft gerade
+  currentWorkflowId: null,
+  // Wurde preItemRoll bereits verarbeitet für diesen Workflow?
+  preItemRollDone: false,
+  // Wurde preDamageRoll bereits verarbeitet für diesen Workflow?
+  preDamageDone: false,
+  // Reckless gerade aktiviert?
+  recklessActivated: false,
+  // Brutal Strike Wahl
+  brutalChoice: null,
+  // Frenzy noch ausstehend?
+  frenzyPending: false,
+  // Erster Angriff dieser Runde?
+  firstAttackDone: false,
+  // Combat Round/Turn beim letzten Angriff
+  lastAttackRound: null,
+  lastAttackTurn: null,
+
+  reset() {
+    this.currentWorkflowId = null;
+    this.preItemRollDone = false;
+    this.preDamageDone = false;
+    this.recklessActivated = false;
+    this.brutalChoice = null;
+  },
+
+  isFirstAttack() {
+    const round = game.combat?.round ?? null;
+    const turn  = game.combat?.turn  ?? null;
+    return this.lastAttackRound !== round || this.lastAttackTurn !== turn;
+  },
+
+  markAttack() {
+    this.lastAttackRound = game.combat?.round ?? null;
+    this.lastAttackTurn  = game.combat?.turn  ?? null;
+  }
+};
 
 // ============================================================
 // Hilfsfunktionen
@@ -18,19 +58,6 @@ function hasEffect(actor, name) {
 
 function getRageUses(actor) {
   return actor.items.getName("Rage")?.system.uses?.value ?? 0;
-}
-
-function isFirstAttackThisTurn(actor) {
-  const last = actor.getFlag("world", "barbarianLastAttackTurn") ?? null;
-  if (!last) return true;
-  return last.round !== game.combat?.round || last.turn !== game.combat?.turn;
-}
-
-async function markAttackThisTurn(actor) {
-  await actor.setFlag("world", "barbarianLastAttackTurn", {
-    round: game.combat?.round ?? 0,
-    turn: game.combat?.turn ?? 0
-  });
 }
 
 function findItemEffect(actor, name) {
@@ -89,18 +116,20 @@ async function onPreItemRoll({ activity, token, workflow }) {
   const actor = token?.actor;
   if (!actor || actor.name !== ACTOR_NAME) return;
   if (activity?.actionType !== "mwak") return;
-  
-  // Guard: pro Workflow nur einmal ausführen
+
   const workflowId = workflow?.id ?? activity?.uuid;
-  if (processedWorkflows.has(workflowId)) return;
-  processedWorkflows.add(workflowId);
-  // Nach 5 Sekunden wieder freigeben
-  setTimeout(() => processedWorkflows.delete(workflowId), 5000);
-  
-  const firstAttack = isFirstAttackThisTurn(actor);
-  let recklessActivated = false;
-  
-  console.log(`${MODULE_ID} | onPreItemRoll gefeuert, workflowId: ${workflowId}, already processed: ${processedWorkflows.has(workflowId)}`);
+
+  // Guard: nur einmal pro Workflow
+  if (state.preItemRollDone && state.currentWorkflowId === workflowId) return;
+
+  state.currentWorkflowId = workflowId;
+  state.preItemRollDone = true;
+  state.preDamageDone = false;
+  state.recklessActivated = false;
+  state.brutalChoice = null;
+
+  const firstAttack = state.isFirstAttack();
+
   // 1. Rage-Erinnerung
   if (!hasEffect(actor, "Rage") && firstAttack && getRageUses(actor) > 0) {
     const doRage = await askYesNo(
@@ -128,19 +157,19 @@ async function onPreItemRoll({ activity, token, workflow }) {
         await recklessActivity.use({}, { configure: false }, { create: true });
         await new Promise(r => setTimeout(r, 500));
       }
-      recklessActivated = true;
+      state.recklessActivated = true;
     }
   }
 
-  const recklessNow = hasEffect(actor, "Attacking Recklessly") || recklessActivated;
+  const recklessNow = hasEffect(actor, "Attacking Recklessly") || state.recklessActivated;
 
-  // Frenzy-Flag setzen
+  // Frenzy-Flag
   if (firstAttack && recklessNow) {
-    await actor.setFlag("world", "barbarianFrenzyPending", true);
+    state.frenzyPending = true;
   }
 
   // 3. Brutal Strike
-  await actor.unsetFlag("world", "barbarianBrutalStrikeChoice");
+  state.brutalChoice = null;
   const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
   if (brutalEffect?.disabled === false) await brutalEffect.update({ disabled: true });
 
@@ -150,14 +179,12 @@ async function onPreItemRoll({ activity, token, workflow }) {
       "Brutal Strike nutzen? Du gibst den Advantage auf diese Attacke auf."
     );
     if (doBrutal) {
-      const choice = await askBrutalStrike();
-      await actor.setFlag("world", "barbarianBrutalStrikeChoice", choice);
-      await actor.setFlag("world", "barbarianBrutalStrikeWorkflow", workflowId);
+      state.brutalChoice = await askBrutalStrike();
       if (brutalEffect) await brutalEffect.update({ disabled: false });
     }
   }
 
-  await markAttackThisTurn(actor);
+  state.markAttack();
 }
 
 // ============================================================
@@ -169,14 +196,29 @@ async function onPreAttackRoll(workflow) {
   if (actor.name !== ACTOR_NAME) return;
   if (workflow.activity?.actionType !== "mwak") return;
 
-  const brutalChoice = actor.getFlag("world", "barbarianBrutalStrikeChoice");
-
-  if (brutalChoice) {
+  if (state.brutalChoice !== null) {
     // Brutal Strike: kein Advantage
     workflow.attackRollModifierTracker.reset();
-  } else if (hasEffect(actor, "Attacking Recklessly")) {
+  } else if (hasEffect(actor, "Attacking Recklessly") || state.recklessActivated) {
     // Reckless ohne Brutal Strike: Advantage
     workflow.attackRollModifierTracker.advantage.add("reckless", "Reckless Attack");
+  }
+}
+
+// ============================================================
+// Hook: midi-qol.AttackRollComplete — Brutal Effect bei Miss disablen
+// ============================================================
+
+async function onAttackRollComplete(workflow) {
+  const actor = workflow.actor;
+  if (actor.name !== ACTOR_NAME) return;
+  if (workflow.activity?.actionType !== "mwak") return;
+
+  // Bei Miss: Brutal Strike Effekt sofort disablen
+  if (!workflow.hitTargets?.size && state.brutalChoice !== null) {
+    const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
+    if (brutalEffect?.disabled === false) await brutalEffect.update({ disabled: true });
+    state.brutalChoice = null;
   }
 }
 
@@ -188,28 +230,36 @@ async function onPreDamageRoll(workflow) {
   const actor = workflow.actor;
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
-  
+
+  // Guard: nur einmal pro Workflow
+  if (state.preDamageDone && state.currentWorkflowId === workflow.id) return;
+
+  // Nur für den Haupt-Workflow (nicht für Frenzy/Brutal Sub-Workflows)
+  // Frenzy und Brutal haben andere workflow IDs
+  const isMainWorkflow = workflow.item?.name === "Großvaters Axt" ||
+    workflow.activity?.actionType === "mwak";
+  if (!isMainWorkflow) return;
+
+  state.preDamageDone = true;
+
   const recklessActive = hasEffect(actor, "Attacking Recklessly");
-  
+
   // 1. Frenzy beim ersten Treffer
-  const frenzyPending = actor.getFlag("world", "barbarianFrenzyPending");
-  if (recklessActive && frenzyPending) {
+  if (recklessActive && state.frenzyPending) {
     const activity = actor.items.getName("Frenzy")?.system.activities?.contents[0];
     if (activity) {
       await activity.use({}, { configure: false }, { create: true });
     }
-    await actor.unsetFlag("world", "barbarianFrenzyPending");
+    state.frenzyPending = false;
   }
-  
-  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id: ${workflow.id}, frenzyPending: ${actor.getFlag("world", "barbarianFrenzyPending")}, hitTargets: ${workflow.hitTargets?.size}`);
+
   // 2. Brutal Strike Effekte
-  const brutalChoice = actor.getFlag("world", "barbarianBrutalStrikeChoice");
-  if (!brutalChoice) return;
+  if (!state.brutalChoice) return;
 
   const target = workflow.hitTargets.first();
   if (!target) return;
 
-  if (brutalChoice === "forceful") {
+  if (state.brutalChoice === "forceful") {
     const gridSize = canvas.grid.size;
     const pushPx   = gridSize * 3;
 
@@ -239,7 +289,7 @@ async function onPreDamageRoll(workflow) {
       `
     });
 
-  } else if (brutalChoice === "hamstring") {
+  } else if (state.brutalChoice === "hamstring") {
     const existing = target.actor.effects.find(e => e.name === "Hamstring Blow");
     if (existing) await existing.delete();
 
@@ -263,41 +313,23 @@ async function onPreDamageRoll(workflow) {
     if (wf.id !== workflow.id) return;
     const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
     if (brutalEffect) await brutalEffect.update({ disabled: true });
-    await actor.unsetFlag("world", "barbarianBrutalStrikeChoice");
-    await actor.unsetFlag("world", "barbarianBrutalStrikeWorkflow");
+    state.brutalChoice = null;
   });
 }
 
 // ============================================================
-// Hook: midi-qol.AttackRollComplete — Brutal Effect bei Miss disablen
-// ============================================================
-
-async function onAttackRollComplete(workflow) {
-  const actor = workflow.actor;
-  if (actor.name !== ACTOR_NAME) return;
-
-  // Wenn verfehlt: Brutal Strike Effekt sofort disablen
-  if (!workflow.hitTargets?.size) {
-    const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
-    if (brutalEffect?.disabled === false) await brutalEffect.update({ disabled: true });
-    await actor.unsetFlag("world", "barbarianBrutalStrikeChoice");
-    await actor.unsetFlag("world", "barbarianBrutalStrikeWorkflow");
-  }
-}
-
-// ============================================================
-// Hook: combatTurnChange — Flags zurücksetzen
+// Hook: combatTurnChange — State zurücksetzen
 // ============================================================
 
 async function onCombatTurnChange(combat) {
   for (const combatant of combat.combatants) {
     const actor = combatant.actor;
     if (!actor || actor.name !== ACTOR_NAME) continue;
-    await actor.unsetFlag("world", "barbarianLastAttackTurn").catch(() => {});
-    await actor.unsetFlag("world", "barbarianBrutalStrikeChoice").catch(() => {});
-    await actor.unsetFlag("world", "barbarianBrutalStrikeWorkflow").catch(() => {});
+    state.reset();
+    state.frenzyPending = false;
+    state.lastAttackRound = null;
+    state.lastAttackTurn = null;
     await actor.unsetFlag("world", "barbarianForcefulBlowTarget").catch(() => {});
-    await actor.unsetFlag("world", "barbarianFrenzyPending").catch(() => {});
   }
 }
 
@@ -334,8 +366,8 @@ Hooks.once("ready", () => {
 
   Hooks.on("midi-qol.preItemRoll",        onPreItemRoll);
   Hooks.on("midi-qol.preAttackRoll",      onPreAttackRoll);
-  Hooks.on("midi-qol.preDamageRoll",      onPreDamageRoll);
   Hooks.on("midi-qol.AttackRollComplete", onAttackRollComplete);
+  Hooks.on("midi-qol.preDamageRoll",      onPreDamageRoll);
   Hooks.on("combatTurnChange",            onCombatTurnChange);
   Hooks.on("renderChatMessageHTML",       onRenderChatMessageHTML);
 
