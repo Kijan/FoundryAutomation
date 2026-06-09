@@ -1,5 +1,5 @@
 // ============================================================
-// Nisras Barbarian Automation
+// Nisras Barbarian Automation v1.1
 // Registriert sich direkt in Midi-QOL Hooks — keine Macros nötig
 // ============================================================
 
@@ -15,8 +15,7 @@ function hasEffect(actor, name) {
 }
 
 function getRageUses(actor) {
-  const rage = actor.items.getName("Rage");
-  return rage?.system.uses?.value ?? 0;
+  return actor.items.getName("Rage")?.system.uses?.value ?? 0;
 }
 
 function isFirstAttackThisTurn(actor) {
@@ -27,19 +26,6 @@ function isFirstAttackThisTurn(actor) {
 
 async function markAttackThisTurn(actor) {
   await actor.setFlag("world", "barbarianLastAttackTurn", {
-    round: game.combat?.round ?? 0,
-    turn: game.combat?.turn ?? 0
-  });
-}
-
-function isFirstDamageThisTurn(actor) {
-  const last = actor.getFlag("world", "barbarianLastDamageTurn") ?? null;
-  if (!last) return true;
-  return last.round !== game.combat?.round || last.turn !== game.combat?.turn;
-}
-
-async function markDamageThisTurn(actor) {
-  await actor.setFlag("world", "barbarianLastDamageTurn", {
     round: game.combat?.round ?? 0,
     turn: game.combat?.turn ?? 0
   });
@@ -68,7 +54,7 @@ function askYesNo(title, content) {
       title,
       content: `<p>${content}</p>`,
       buttons: {
-        yes: { label: "Ja", callback: () => resolve(true) },
+        yes: { label: "Ja",   callback: () => resolve(true) },
         no:  { label: "Nein", callback: () => resolve(false) }
       },
       default: "no",
@@ -94,27 +80,27 @@ function askBrutalStrike() {
 }
 
 // ============================================================
-// Hook: midi-qol.preAttackRoll — Rage + Reckless
+// Hook: midi-qol.preItemRoll — Alle Dialoge VOR der Chat-Karte
 // ============================================================
 
-async function onPreAttackRoll(workflow) {
-  const actor = workflow.actor;
-  if (actor.name !== ACTOR_NAME) return;
-  if (workflow.activity?.actionType !== "mwak") return;
+async function onPreItemRoll({ activity, token, config, workflow }) {
+  const actor = token?.actor;
+  if (!actor || actor.name !== ACTOR_NAME) return;
+  if (activity?.actionType !== "mwak") return;
 
-  const rageActive  = hasEffect(actor, "Rage");
   const firstAttack = isFirstAttackThisTurn(actor);
+  let recklessActivated = false;
 
   // 1. Rage-Erinnerung wenn Rage nicht aktiv aber noch Ladungen vorhanden
-  if (!rageActive && firstAttack && getRageUses(actor) > 0) {
+  if (!hasEffect(actor, "Rage") && firstAttack && getRageUses(actor) > 0) {
     const doRage = await askYesNo(
       "Rage aktivieren?",
       "Du hast noch Rage-Ladungen. Rage aktivieren? <em>(Bonus Action)</em>"
     );
     if (doRage) {
-      const activity = actor.items.getName("Rage")?.system.activities?.contents[0];
-      if (activity) {
-        await activity.use({}, { configure: false }, { create: true });
+      const rageActivity = actor.items.getName("Rage")?.system.activities?.contents[0];
+      if (rageActivity) {
+        await rageActivity.use({}, { configure: false }, { create: true });
         await new Promise(r => setTimeout(r, 500));
       }
     }
@@ -127,57 +113,65 @@ async function onPreAttackRoll(workflow) {
       "Reckless Attack nutzen? Du erhältst Advantage auf diese Attacke, gibst aber Advantage auf alle Angriffe gegen dich bis zu deinem nächsten Zug."
     );
     if (doReckless) {
-      const activity = actor.items.getName("Reckless Attack")?.system.activities?.contents[0];
-      if (activity) {
-        await activity.use({}, { configure: false }, { create: true });
+      const recklessActivity = actor.items.getName("Reckless Attack")?.system.activities?.contents[0];
+      if (recklessActivity) {
+        await recklessActivity.use({}, { configure: false }, { create: true });
         await new Promise(r => setTimeout(r, 500));
       }
-      workflow.attackRollModifierTracker.advantage.add("reckless", "Reckless Attack");
+      recklessActivated = true;
     }
   }
 
-  // Frenzy-Flag setzen beim ersten Angriff wenn Reckless aktiv
-  // (unabhängig ob getroffen wird, damit Frenzy nicht beim 2. Treffer nochmal feuert)
-  if (hasEffect(actor, "Attacking Recklessly") && isFirstAttackThisTurn(actor)) {
+  // Frenzy-Flag setzen wenn Reckless aktiv (auch wenn gerade erst aktiviert)
+  if (firstAttack && (hasEffect(actor, "Attacking Recklessly") || recklessActivated)) {
     await actor.setFlag("world", "barbarianFrenzyPending", true);
+  }
+
+  // 3. Brutal Strike Dialog wenn Reckless aktiv
+  // Advantage-Prüfung hier noch nicht möglich (Tracker noch nicht gesetzt)
+  // Disadvantage durch Conditions prüfen
+  const recklessNow = hasEffect(actor, "Attacking Recklessly") || recklessActivated;
+  if (recklessNow && !hasAttackDisadvantageCondition(actor)) {
+    const doBrutal = await askYesNo(
+      "Brutal Strike?",
+      "Brutal Strike nutzen? Du gibst den Advantage auf diese Attacke auf."
+    );
+    if (doBrutal) {
+      const choice = await askBrutalStrike();
+      await actor.setFlag("world", "barbarianBrutalStrikeChoice", choice);
+      // Brutal Strike Damage Effekt enablen
+      const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
+      if (brutalEffect) await brutalEffect.update({ disabled: false });
+    } else {
+      await actor.unsetFlag("world", "barbarianBrutalStrikeChoice");
+    }
+  } else {
+    await actor.unsetFlag("world", "barbarianBrutalStrikeChoice");
   }
 
   await markAttackThisTurn(actor);
 }
 
 // ============================================================
-// Hook: midi-qol.preAttackRollConfig — Brutal Strike
+// Hook: midi-qol.preAttackRoll — Advantage/Brutal Strike in Tracker schreiben
 // ============================================================
 
-async function onPreAttackRollConfig(workflow) {
+async function onPreAttackRoll(workflow) {
   const actor = workflow.actor;
   if (actor.name !== ACTOR_NAME) return;
   if (workflow.activity?.actionType !== "mwak") return;
-  if (!hasEffect(actor, "Attacking Recklessly")) return;
 
-  const hasAdvantage    = workflow.attackRollModifierTracker.hasAdvantage;
-  const hasDisadvantage = workflow.attackRollModifierTracker.hasDisadvantage;
-  if (!hasAdvantage || hasDisadvantage || hasAttackDisadvantageCondition(actor)) return;
-
-  const doBrutal = await askYesNo(
-    "Brutal Strike?",
-    "Brutal Strike nutzen? Du gibst den Advantage auf diese Attacke auf."
-  );
-  if (!doBrutal) {
-    await actor.unsetFlag("world", "barbarianBrutalStrikeChoice");
-    return;
+  // Reckless Advantage in Tracker schreiben
+  if (hasEffect(actor, "Attacking Recklessly")) {
+    workflow.attackRollModifierTracker.advantage.add("reckless", "Reckless Attack");
   }
 
-  // Advantage wegnehmen
-  workflow.attackRollModifierTracker.reset();
-  workflow.attackRollModifierTracker.advantage.suppress("brutalStrike", "Brutal Strike");
-
-  const choice = await askBrutalStrike();
-  await actor.setFlag("world", "barbarianBrutalStrikeChoice", choice);
-
-  // Brutal Strike Damage Effekt enablen
-  const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
-  if (brutalEffect) await brutalEffect.update({ disabled: false });
+  // Brutal Strike — Advantage unterdrücken wenn gewählt
+  const brutalChoice = actor.getFlag("world", "barbarianBrutalStrikeChoice");
+  if (brutalChoice) {
+    workflow.attackRollModifierTracker.reset();
+    workflow.attackRollModifierTracker.advantage.suppress("brutalStrike", "Brutal Strike");
+  }
 }
 
 // ============================================================
@@ -188,13 +182,10 @@ async function onPreDamageRoll(workflow) {
   const actor = workflow.actor;
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
-  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id:`, workflow.id);
-  console.trace();
 
   const recklessActive = hasEffect(actor, "Attacking Recklessly");
-  const firstDamage    = isFirstDamageThisTurn(actor);
 
-  // 1. Frenzy beim ersten Treffer wenn Reckless aktiv und noch nicht ausgelöst
+  // 1. Frenzy beim ersten Treffer wenn pending
   const frenzyPending = actor.getFlag("world", "barbarianFrenzyPending");
   if (recklessActive && frenzyPending) {
     const activity = actor.items.getName("Frenzy")?.system.activities?.contents[0];
@@ -289,7 +280,6 @@ async function onCombatTurnChange(combat) {
     const actor = combatant.actor;
     if (!actor || actor.name !== ACTOR_NAME) continue;
     await actor.unsetFlag("world", "barbarianLastAttackTurn").catch(() => {});
-    await actor.unsetFlag("world", "barbarianLastDamageTurn").catch(() => {});
     await actor.unsetFlag("world", "barbarianBrutalStrikeChoice").catch(() => {});
     await actor.unsetFlag("world", "barbarianForcefulBlowTarget").catch(() => {});
     await actor.unsetFlag("world", "barbarianFrenzyPending").catch(() => {});
@@ -330,11 +320,11 @@ function onRenderChatMessageHTML(message, html) {
 Hooks.once("ready", () => {
   console.log(`${MODULE_ID} | Initialisiert — registriere Hooks`);
 
-  Hooks.on("midi-qol.preAttackRoll",       onPreAttackRoll);
-  Hooks.on("midi-qol.preAttackRollConfig", onPreAttackRollConfig);
-  Hooks.on("midi-qol.preDamageRoll",       onPreDamageRoll);
-  Hooks.on("combatTurnChange",             onCombatTurnChange);
-  Hooks.on("renderChatMessageHTML",        onRenderChatMessageHTML);
+  Hooks.on("midi-qol.preItemRoll",       onPreItemRoll);
+  Hooks.on("midi-qol.preAttackRoll",     onPreAttackRoll);
+  Hooks.on("midi-qol.preDamageRoll",     onPreDamageRoll);
+  Hooks.on("combatTurnChange",           onCombatTurnChange);
+  Hooks.on("renderChatMessageHTML",      onRenderChatMessageHTML);
 
   console.log(`${MODULE_ID} | Alle Hooks registriert`);
 });
