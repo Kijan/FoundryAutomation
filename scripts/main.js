@@ -136,6 +136,12 @@ async function onPreAttackRoll(workflow) {
     }
   }
 
+  // Frenzy-Flag setzen beim ersten Angriff wenn Reckless aktiv
+  // (unabhängig ob getroffen wird, damit Frenzy nicht beim 2. Treffer nochmal feuert)
+  if (hasEffect(actor, "Attacking Recklessly") && isFirstAttackThisTurn(actor)) {
+    await actor.setFlag("world", "barbarianFrenzyPending", true);
+  }
+
   await markAttackThisTurn(actor);
 }
 
@@ -188,13 +194,14 @@ async function onPreDamageRoll(workflow) {
   const recklessActive = hasEffect(actor, "Attacking Recklessly");
   const firstDamage    = isFirstDamageThisTurn(actor);
 
-  // 1. Frenzy beim ersten Damage wenn Reckless aktiv
-  if (recklessActive && firstDamage) {
+  // 1. Frenzy beim ersten Treffer wenn Reckless aktiv und noch nicht ausgelöst
+  const frenzyPending = actor.getFlag("world", "barbarianFrenzyPending");
+  if (recklessActive && frenzyPending) {
     const activity = actor.items.getName("Frenzy")?.system.activities?.contents[0];
     if (activity) {
       await activity.use({}, { configure: false }, { create: true });
     }
-    await markDamageThisTurn(actor);
+    await actor.unsetFlag("world", "barbarianFrenzyPending");
   }
 
   // 2. Brutal Strike Effekte anwenden
@@ -285,6 +292,7 @@ async function onCombatTurnChange(combat) {
     await actor.unsetFlag("world", "barbarianLastDamageTurn").catch(() => {});
     await actor.unsetFlag("world", "barbarianBrutalStrikeChoice").catch(() => {});
     await actor.unsetFlag("world", "barbarianForcefulBlowTarget").catch(() => {});
+    await actor.unsetFlag("world", "barbarianFrenzyPending").catch(() => {});
   }
 }
 
