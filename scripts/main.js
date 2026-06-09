@@ -86,21 +86,21 @@ function askBrutalStrike() {
 // ============================================================
 
 async function onPreItemRoll({ activity, token, workflow }) {
-  console.log(`${MODULE_ID} | onPreItemRoll gefeuert, workflowId: ${workflowId}, already processed: ${processedWorkflows.has(workflowId)}`);
   const actor = token?.actor;
   if (!actor || actor.name !== ACTOR_NAME) return;
   if (activity?.actionType !== "mwak") return;
-
+  
   // Guard: pro Workflow nur einmal ausführen
   const workflowId = workflow?.id ?? activity?.uuid;
   if (processedWorkflows.has(workflowId)) return;
   processedWorkflows.add(workflowId);
   // Nach 5 Sekunden wieder freigeben
   setTimeout(() => processedWorkflows.delete(workflowId), 5000);
-
+  
   const firstAttack = isFirstAttackThisTurn(actor);
   let recklessActivated = false;
-
+  
+  console.log(`${MODULE_ID} | onPreItemRoll gefeuert, workflowId: ${workflowId}, already processed: ${processedWorkflows.has(workflowId)}`);
   // 1. Rage-Erinnerung
   if (!hasEffect(actor, "Rage") && firstAttack && getRageUses(actor) > 0) {
     const doRage = await askYesNo(
@@ -186,12 +186,11 @@ async function onPreAttackRoll(workflow) {
 
 async function onPreDamageRoll(workflow) {
   const actor = workflow.actor;
-  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id: ${workflow.id}, frenzyPending: ${actor.getFlag("world", "barbarianFrenzyPending")}, hitTargets: ${workflow.hitTargets?.size}`);
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
-
+  
   const recklessActive = hasEffect(actor, "Attacking Recklessly");
-
+  
   // 1. Frenzy beim ersten Treffer
   const frenzyPending = actor.getFlag("world", "barbarianFrenzyPending");
   if (recklessActive && frenzyPending) {
@@ -201,7 +200,8 @@ async function onPreDamageRoll(workflow) {
     }
     await actor.unsetFlag("world", "barbarianFrenzyPending");
   }
-
+  
+  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id: ${workflow.id}, frenzyPending: ${actor.getFlag("world", "barbarianFrenzyPending")}, hitTargets: ${workflow.hitTargets?.size}`);
   // 2. Brutal Strike Effekte
   const brutalChoice = actor.getFlag("world", "barbarianBrutalStrikeChoice");
   if (!brutalChoice) return;
