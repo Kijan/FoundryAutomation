@@ -8,11 +8,16 @@
     "verified": "14"
   },
   "authors": [
-    { "name": "Kijan" }
+    {
+      "name": "Kijan"
+    }
   ],
   "scripts": [
     "scripts/main.js"
   ],
+  "manifest": "https://raw.githubusercontent.com/Kijan/FoundryAutomation/main/nisras-automation/module.json",
+  "download": "https://github.com/Kijan/FoundryAutomation/archive/refs/heads/main.zip",
   "languages": [],
   "flags": {}
 }
+
