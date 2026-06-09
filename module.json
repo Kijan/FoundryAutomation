@@ -1,6 +1,6 @@
 {
-  "id": "nisras-automation",
-  "title": "Nisras Barbarian Automation",
+  "id": "foundry-automation",
+  "title": "FoundryAutomation",
   "description": "Automated combat features for Nisras the Barbarian: Rage, Reckless Attack, Brutal Strike, Frenzy, Forceful Blow, Hamstring Blow.",
   "version": "1.0.0",
   "compatibility": {
@@ -8,16 +8,13 @@
     "verified": "14"
   },
   "authors": [
-    {
-      "name": "Kijan"
-    }
+    { "name": "Kijan" }
   ],
   "scripts": [
     "scripts/main.js"
   ],
-  "manifest": "https://raw.githubusercontent.com/Kijan/FoundryAutomation/main/nisras-automation/module.json",
+  "manifest": "https://raw.githubusercontent.com/Kijan/FoundryAutomation/main/module.json",
   "download": "https://github.com/Kijan/FoundryAutomation/archive/refs/heads/main.zip",
   "languages": [],
   "flags": {}
 }
-
