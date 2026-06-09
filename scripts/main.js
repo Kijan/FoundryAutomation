@@ -182,6 +182,8 @@ async function onPreDamageRoll(workflow) {
   const actor = workflow.actor;
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
+  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id:`, workflow.id);
+  console.trace();
 
   const recklessActive = hasEffect(actor, "Attacking Recklessly");
   const firstDamage    = isFirstDamageThisTurn(actor);
