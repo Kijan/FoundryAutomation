@@ -86,6 +86,7 @@ function askBrutalStrike() {
 // ============================================================
 
 async function onPreItemRoll({ activity, token, workflow }) {
+  console.log(`${MODULE_ID} | onPreItemRoll gefeuert, workflowId: ${workflowId}, already processed: ${processedWorkflows.has(workflowId)}`);
   const actor = token?.actor;
   if (!actor || actor.name !== ACTOR_NAME) return;
   if (activity?.actionType !== "mwak") return;
@@ -184,6 +185,7 @@ async function onPreAttackRoll(workflow) {
 // ============================================================
 
 async function onPreDamageRoll(workflow) {
+  console.log(`${MODULE_ID} | onPreDamageRoll gefeuert, workflow.id: ${workflow.id}, frenzyPending: ${actor.getFlag("world", "barbarianFrenzyPending")}, hitTargets: ${workflow.hitTargets?.size}`);
   const actor = workflow.actor;
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
