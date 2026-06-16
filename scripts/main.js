@@ -1,28 +1,27 @@
 // ============================================================
-// Nisras Barbarian Automation v1.3
+// Nisras Barbarian Automation v1.4
 // ============================================================
 
 const MODULE_ID = "nisras-automation";
 const ACTOR_NAME = "Nisras";
 
 // ============================================================
-// Zustands-Variablen (im Modul-Scope, kein Server-Roundtrip)
+// Zustands-Variablen
 // ============================================================
 
 const state = {
-  // --- Per-Angriff State (wird bei jedem neuen Angriff zurückgesetzt) ---
-  currentWorkflowId: null,   // Workflow ID des aktuellen Angriffs
-  preItemRollDone: false,    // Guard für preItemRoll
-  preDamageDone: false,      // Guard für preDamageRoll
-  recklessActivated: false,  // Reckless gerade in diesem Angriff aktiviert?
-  brutalChoice: null,        // Brutal Strike Wahl ("forceful"/"hamstring"/"none"/null)
+  // Per-Angriff (wird bei jedem neuen Angriff zurückgesetzt)
+  currentWorkflowId: null,
+  preItemRollDone: false,
+  preDamageDone: false,
+  recklessActivated: false,
+  brutalChoice: null,        // null = kein Brutal Strike, "forceful"/"hamstring"/"none" = Brutal Strike gewählt
 
-  // --- Per-Zug State (wird beim Rundenwechsel zurückgesetzt) ---
-  frenzyPending: false,      // Frenzy noch ausstehend (erstes Reckless-Treffer dieser Runde)?
-  lastAttackRound: null,     // Runde des letzten Angriffs
-  lastAttackTurn: null,      // Zug des letzten Angriffs
+  // Per-Zug (wird beim Rundenwechsel zurückgesetzt)
+  frenzyPending: false,
+  lastAttackRound: null,
+  lastAttackTurn: null,
 
-  // Neuen Angriff starten — per-Angriff State zurücksetzen
   newAttack(workflowId) {
     this.currentWorkflowId = workflowId;
     this.preItemRollDone = true;
@@ -31,7 +30,6 @@ const state = {
     this.brutalChoice = null;
   },
 
-  // Neuen Zug starten — alles zurücksetzen
   newTurn() {
     this.currentWorkflowId = null;
     this.preItemRollDone = false;
@@ -127,9 +125,12 @@ async function onPreItemRoll({ activity, token, workflow }) {
   const workflowId = workflow?.id ?? activity?.uuid;
 
   // Guard: nur einmal pro Workflow
-  if (state.preItemRollDone && state.currentWorkflowId === workflowId) return;
+  if (state.preItemRollDone && state.currentWorkflowId === workflowId) {
+    console.log(`${MODULE_ID} | preItemRoll | Guard aktiv, überspringe`);
+    return;
+  }
 
-  // Neuen Angriff starten
+  console.log(`${MODULE_ID} | preItemRoll | Neuer Angriff, workflowId: ${workflowId}`);
   state.newAttack(workflowId);
 
   const firstAttack = state.isFirstAttack();
@@ -149,7 +150,7 @@ async function onPreItemRoll({ activity, token, workflow }) {
     }
   }
 
-  // 2. Reckless Attack
+  // 2. Reckless Attack (nur beim ersten Angriff)
   if (hasEffect(actor, "Rage") && firstAttack && !hasEffect(actor, "Attacking Recklessly")) {
     const doReckless = await askYesNo(
       "Reckless Attack?",
@@ -167,12 +168,12 @@ async function onPreItemRoll({ activity, token, workflow }) {
 
   const recklessNow = hasEffect(actor, "Attacking Recklessly") || state.recklessActivated;
 
-  // Frenzy-Flag
+  // Frenzy-Flag setzen beim ersten Angriff wenn Reckless aktiv
   if (firstAttack && recklessNow) {
     state.frenzyPending = true;
   }
 
-  // 3. Brutal Strike
+  // 3. Brutal Strike — bei JEDEM Angriff wenn Reckless aktiv
   state.brutalChoice = null;
   const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
   if (brutalEffect?.disabled === false) await brutalEffect.update({ disabled: true });
@@ -184,15 +185,17 @@ async function onPreItemRoll({ activity, token, workflow }) {
     );
     if (doBrutal) {
       state.brutalChoice = await askBrutalStrike();
+      console.log(`${MODULE_ID} | preItemRoll | Brutal Strike gewählt: ${state.brutalChoice}`);
       if (brutalEffect) await brutalEffect.update({ disabled: false });
     }
   }
 
   state.markAttack();
+  console.log(`${MODULE_ID} | preItemRoll | Fertig | recklessActivated: ${state.recklessActivated} | brutalChoice: ${state.brutalChoice} | frenzyPending: ${state.frenzyPending}`);
 }
 
 // ============================================================
-// Hook: midi-qol.preAttackRoll — Advantage/Suppress in Tracker
+// Hook: midi-qol.preAttackRoll — Advantage in Tracker schreiben
 // ============================================================
 
 async function onPreAttackRoll(workflow) {
@@ -202,17 +205,18 @@ async function onPreAttackRoll(workflow) {
 
   console.log(`${MODULE_ID} | preAttackRoll | brutalChoice: ${state.brutalChoice} | recklessActivated: ${state.recklessActivated} | hasAdvantage: ${workflow.attackRollModifierTracker.hasAdvantage}`);
 
-  if (state.brutalChoice !== null) {
-    // Brutal Strike: Advantage supprimieren — überschreibt auch nachträglich gesetzten Advantage durch Reckless Active Effect
-    workflow.attackRollModifierTracker.advantage.suppress("brutalStrike", "Brutal Strike");
-  } else if (hasEffect(actor, "Attacking Recklessly") || state.recklessActivated) {
-    // Reckless ohne Brutal Strike: Advantage
+  if (!(hasEffect(actor, "Attacking Recklessly") || state.recklessActivated)) return;
+
+  if (state.brutalChoice === null) {
+    // Kein Brutal Strike → Advantage hinzufügen
     workflow.attackRollModifierTracker.advantage.add("reckless", "Reckless Attack");
+    console.log(`${MODULE_ID} | preAttackRoll | Advantage hinzugefügt`);
   }
+  // Bei Brutal Strike: suppress läuft in preAttackRollConfig nach checkAttackAdvantage
 }
 
 // ============================================================
-// Hook: midi-qol.preAttackRollConfig — Brutal Strike Advantage supprimieren (nach checkAttackAdvantage)
+// Hook: midi-qol.preAttackRollConfig — Brutal Strike Advantage supprimieren
 // ============================================================
 
 async function onPreAttackRollConfig(workflow) {
@@ -220,9 +224,11 @@ async function onPreAttackRollConfig(workflow) {
   if (actor.name !== ACTOR_NAME) return;
   if (workflow.activity?.actionType !== "mwak") return;
 
+  console.log(`${MODULE_ID} | preAttackRollConfig | brutalChoice: ${state.brutalChoice} | hasAdvantage: ${workflow.attackRollModifierTracker.hasAdvantage}`);
+
   if (state.brutalChoice !== null) {
-    // checkAttackAdvantage() hat jetzt Reckless Advantage gesetzt — jetzt supprimieren
     workflow.attackRollModifierTracker.advantage.suppress("brutalStrike", "Brutal Strike");
+    console.log(`${MODULE_ID} | preAttackRollConfig | Advantage supprimiert | hasAdvantage after: ${workflow.attackRollModifierTracker.hasAdvantage}`);
   }
 }
 
@@ -235,8 +241,8 @@ async function onAttackRollComplete(workflow) {
   if (actor.name !== ACTOR_NAME) return;
   if (workflow.activity?.actionType !== "mwak") return;
 
-  // Bei Miss: Brutal Strike Effekt sofort disablen
   if (!workflow.hitTargets?.size && state.brutalChoice !== null) {
+    console.log(`${MODULE_ID} | AttackRollComplete | Miss — Brutal Effect disablen`);
     const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
     if (brutalEffect?.disabled === false) await brutalEffect.update({ disabled: true });
     state.brutalChoice = null;
@@ -252,12 +258,14 @@ async function onPreDamageRoll(workflow) {
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
 
-  // Nur für den Haupt-Workflow (mwak) — nicht für Frenzy/Brutal Sub-Workflows
+  // Nur mwak Haupt-Workflow
   if (workflow.activity?.actionType !== "mwak") return;
 
   // Guard: nur einmal pro Workflow-ID
   if (state.preDamageDone && state.currentWorkflowId === workflow.id) return;
   state.preDamageDone = true;
+
+  console.log(`${MODULE_ID} | preDamageRoll | brutalChoice: ${state.brutalChoice} | frenzyPending: ${state.frenzyPending}`);
 
   const recklessActive = hasEffect(actor, "Attacking Recklessly");
 
@@ -268,6 +276,7 @@ async function onPreDamageRoll(workflow) {
       await activity.use({}, { configure: false }, { create: true });
     }
     state.frenzyPending = false;
+    console.log(`${MODULE_ID} | preDamageRoll | Frenzy ausgelöst`);
   }
 
   // 2. Brutal Strike Effekte
@@ -331,6 +340,7 @@ async function onPreDamageRoll(workflow) {
     const brutalEffect = findItemEffect(actor, "Reckless Attack: Brutal Strike Damage");
     if (brutalEffect) await brutalEffect.update({ disabled: true });
     state.brutalChoice = null;
+    console.log(`${MODULE_ID} | DamageRollComplete | Brutal Effect disabled`);
   });
 }
 
@@ -342,6 +352,7 @@ async function onCombatTurnChange(combat) {
   for (const combatant of combat.combatants) {
     const actor = combatant.actor;
     if (!actor || actor.name !== ACTOR_NAME) continue;
+    console.log(`${MODULE_ID} | combatTurnChange | State zurücksetzen`);
     state.newTurn();
     await actor.unsetFlag("world", "barbarianForcefulBlowTarget").catch(() => {});
   }
