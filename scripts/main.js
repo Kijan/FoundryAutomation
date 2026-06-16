@@ -412,9 +412,11 @@ function onRenderChatMessageHTML(message, html) {
 // dnd5e.preRollAttack — erzwingt NORMAL wenn Brutal Strike gewählt wurde
 function onDnd5ePreRollAttack(config, dialog, message) {
   const actor = config.workflow?.actor ?? config.subject?.actor;
+  console.log(`${MODULE_ID} | preRollAttack | actor: ${actor?.name} | brutalChoice: ${state.brutalChoice}`);
   if (!isNisras(actor)) return;
   if (state.brutalChoice === null) return;
   forceNormalAttackRoll(config, dialog);
+  console.log(`${MODULE_ID} | preRollAttack | forceNormal ausgeführt | advMode: ${config.rolls?.[0]?.options?.advantageMode}`);
 }
 
 Hooks.once("ready", () => {
