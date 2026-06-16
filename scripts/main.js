@@ -10,30 +10,37 @@ const ACTOR_NAME = "Nisras";
 // ============================================================
 
 const state = {
-  // Welcher Workflow läuft gerade
-  currentWorkflowId: null,
-  // Wurde preItemRoll bereits verarbeitet für diesen Workflow?
-  preItemRollDone: false,
-  // Wurde preDamageRoll bereits verarbeitet für diesen Workflow?
-  preDamageDone: false,
-  // Reckless gerade aktiviert?
-  recklessActivated: false,
-  // Brutal Strike Wahl
-  brutalChoice: null,
-  // Frenzy noch ausstehend?
-  frenzyPending: false,
-  // Erster Angriff dieser Runde?
-  firstAttackDone: false,
-  // Combat Round/Turn beim letzten Angriff
-  lastAttackRound: null,
-  lastAttackTurn: null,
+  // --- Per-Angriff State (wird bei jedem neuen Angriff zurückgesetzt) ---
+  currentWorkflowId: null,   // Workflow ID des aktuellen Angriffs
+  preItemRollDone: false,    // Guard für preItemRoll
+  preDamageDone: false,      // Guard für preDamageRoll
+  recklessActivated: false,  // Reckless gerade in diesem Angriff aktiviert?
+  brutalChoice: null,        // Brutal Strike Wahl ("forceful"/"hamstring"/"none"/null)
 
-  reset() {
+  // --- Per-Zug State (wird beim Rundenwechsel zurückgesetzt) ---
+  frenzyPending: false,      // Frenzy noch ausstehend (erstes Reckless-Treffer dieser Runde)?
+  lastAttackRound: null,     // Runde des letzten Angriffs
+  lastAttackTurn: null,      // Zug des letzten Angriffs
+
+  // Neuen Angriff starten — per-Angriff State zurücksetzen
+  newAttack(workflowId) {
+    this.currentWorkflowId = workflowId;
+    this.preItemRollDone = true;
+    this.preDamageDone = false;
+    this.recklessActivated = false;
+    this.brutalChoice = null;
+  },
+
+  // Neuen Zug starten — alles zurücksetzen
+  newTurn() {
     this.currentWorkflowId = null;
     this.preItemRollDone = false;
     this.preDamageDone = false;
     this.recklessActivated = false;
     this.brutalChoice = null;
+    this.frenzyPending = false;
+    this.lastAttackRound = null;
+    this.lastAttackTurn = null;
   },
 
   isFirstAttack() {
@@ -122,11 +129,8 @@ async function onPreItemRoll({ activity, token, workflow }) {
   // Guard: nur einmal pro Workflow
   if (state.preItemRollDone && state.currentWorkflowId === workflowId) return;
 
-  state.currentWorkflowId = workflowId;
-  state.preItemRollDone = true;
-  state.preDamageDone = false;
-  state.recklessActivated = false;
-  state.brutalChoice = null;
+  // Neuen Angriff starten
+  state.newAttack(workflowId);
 
   const firstAttack = state.isFirstAttack();
 
@@ -196,6 +200,8 @@ async function onPreAttackRoll(workflow) {
   if (actor.name !== ACTOR_NAME) return;
   if (workflow.activity?.actionType !== "mwak") return;
 
+  console.log(`${MODULE_ID} | preAttackRoll | brutalChoice: ${state.brutalChoice} | recklessActivated: ${state.recklessActivated} | hasAdvantage: ${workflow.attackRollModifierTracker.hasAdvantage}`);
+
   if (state.brutalChoice !== null) {
     // Brutal Strike: kein Advantage
     workflow.attackRollModifierTracker.reset();
@@ -231,15 +237,11 @@ async function onPreDamageRoll(workflow) {
   if (actor.name !== ACTOR_NAME) return;
   if (!workflow.hitTargets?.size) return;
 
-  // Guard: nur einmal pro Workflow
+  // Nur für den Haupt-Workflow (mwak) — nicht für Frenzy/Brutal Sub-Workflows
+  if (workflow.activity?.actionType !== "mwak") return;
+
+  // Guard: nur einmal pro Workflow-ID
   if (state.preDamageDone && state.currentWorkflowId === workflow.id) return;
-
-  // Nur für den Haupt-Workflow (nicht für Frenzy/Brutal Sub-Workflows)
-  // Frenzy und Brutal haben andere workflow IDs
-  const isMainWorkflow = workflow.item?.name === "Großvaters Axt" ||
-    workflow.activity?.actionType === "mwak";
-  if (!isMainWorkflow) return;
-
   state.preDamageDone = true;
 
   const recklessActive = hasEffect(actor, "Attacking Recklessly");
@@ -325,10 +327,7 @@ async function onCombatTurnChange(combat) {
   for (const combatant of combat.combatants) {
     const actor = combatant.actor;
     if (!actor || actor.name !== ACTOR_NAME) continue;
-    state.reset();
-    state.frenzyPending = false;
-    state.lastAttackRound = null;
-    state.lastAttackTurn = null;
+    state.newTurn();
     await actor.unsetFlag("world", "barbarianForcefulBlowTarget").catch(() => {});
   }
 }
