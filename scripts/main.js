@@ -1,5 +1,5 @@
 // ============================================================
-// Nisras Barbarian Automation v2.1
+// Nisras Barbarian Automation v2.2
 // ============================================================
 // Automatisiert für den Barbaren "Nisras":
 //   - Rage Erinnerung/Aktivierung
@@ -412,20 +412,54 @@ function onRenderChatMessageHTML(message, html) {
 // dnd5e.preRollAttack — erzwingt NORMAL wenn Brutal Strike gewählt wurde
 function onDnd5ePreRollAttack(config, dialog, message) {
   const actor = config.workflow?.actor ?? config.subject?.actor;
-  console.log(`${MODULE_ID} | preRollAttack | actor: ${actor?.name} | brutalChoice: ${state.brutalChoice}`);
   if (!isNisras(actor)) return;
   if (state.brutalChoice === null) return;
   forceNormalAttackRoll(config, dialog);
-  console.log(`${MODULE_ID} | preRollAttack | forceNormal ausgeführt | advMode: ${config.rolls?.[0]?.options?.advantageMode}`);
+}
+
+// renderD20RollConfigurationDialog — läuft NACH AC5E und korrigiert die Button-Vorauswahl im DOM.
+// AC5E setzt den Default-Button auf "advantage" (wegen Reckless); wir stellen auf "normal".
+function onRenderD20Dialog(dialog, element) {
+  if (state.brutalChoice === null) return;
+  const actor = dialog?.config?.workflow?.actor ?? dialog?.config?.subject?.actor;
+  if (!isNisras(actor)) return;
+
+  const root = element instanceof HTMLElement ? element : element?.[0];
+  if (!root) return;
+
+  const ADV = CONFIG.Dice.D20Roll.ADV_MODE;
+
+  // Config-Werte auf NORMAL zwingen
+  if (dialog.config) {
+    dialog.config.advantage = false;
+    if (dialog.config.rolls?.[0]?.options) {
+      dialog.config.rolls[0].options.advantage = false;
+      dialog.config.rolls[0].options.advantageMode = ADV.NORMAL;
+    }
+  }
+  if (dialog.options) {
+    dialog.options.advantageMode = ADV.NORMAL;
+    dialog.options.defaultButton = "normal";
+  }
+
+  // DOM: "normal" Button fokussieren/markieren statt "advantage"
+  const normalBtn = root.querySelector('button[data-action="normal"]');
+  const advBtn = root.querySelector('button[data-action="advantage"]');
+  if (advBtn) advBtn.classList.remove("ac5e-button", "default");
+  if (normalBtn) {
+    normalBtn.focus();
+    normalBtn.classList.add("default");
+  }
 }
 
 Hooks.once("ready", () => {
   Hooks.on("midi-qol.preItemRoll",        onPreItemRoll);
   Hooks.on("dnd5e.preRollAttack",         onDnd5ePreRollAttack);
+  Hooks.on("renderD20RollConfigurationDialog", onRenderD20Dialog);
   Hooks.on("midi-qol.AttackRollComplete", onAttackRollComplete);
   Hooks.on("midi-qol.preDamageRoll",      onPreDamageRoll);
   Hooks.on("combatTurnChange",            onCombatTurnChange);
   Hooks.on("renderChatMessageHTML",       onRenderChatMessageHTML);
 
-  console.log(`${MODULE_ID} | v2.1 geladen und Hooks registriert`);
+  console.log(`${MODULE_ID} | v2.2 geladen und Hooks registriert`);
 });
