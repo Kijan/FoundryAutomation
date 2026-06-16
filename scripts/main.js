@@ -203,11 +203,26 @@ async function onPreAttackRoll(workflow) {
   console.log(`${MODULE_ID} | preAttackRoll | brutalChoice: ${state.brutalChoice} | recklessActivated: ${state.recklessActivated} | hasAdvantage: ${workflow.attackRollModifierTracker.hasAdvantage}`);
 
   if (state.brutalChoice !== null) {
-    // Brutal Strike: kein Advantage
-    workflow.attackRollModifierTracker.reset();
+    // Brutal Strike: Advantage supprimieren — überschreibt auch nachträglich gesetzten Advantage durch Reckless Active Effect
+    workflow.attackRollModifierTracker.advantage.suppress("brutalStrike", "Brutal Strike");
   } else if (hasEffect(actor, "Attacking Recklessly") || state.recklessActivated) {
     // Reckless ohne Brutal Strike: Advantage
     workflow.attackRollModifierTracker.advantage.add("reckless", "Reckless Attack");
+  }
+}
+
+// ============================================================
+// Hook: midi-qol.preAttackRollConfig — Brutal Strike Advantage supprimieren (nach checkAttackAdvantage)
+// ============================================================
+
+async function onPreAttackRollConfig(workflow) {
+  const actor = workflow.actor;
+  if (actor.name !== ACTOR_NAME) return;
+  if (workflow.activity?.actionType !== "mwak") return;
+
+  if (state.brutalChoice !== null) {
+    // checkAttackAdvantage() hat jetzt Reckless Advantage gesetzt — jetzt supprimieren
+    workflow.attackRollModifierTracker.advantage.suppress("brutalStrike", "Brutal Strike");
   }
 }
 
@@ -365,6 +380,7 @@ Hooks.once("ready", () => {
 
   Hooks.on("midi-qol.preItemRoll",        onPreItemRoll);
   Hooks.on("midi-qol.preAttackRoll",      onPreAttackRoll);
+  Hooks.on("midi-qol.preAttackRollConfig", onPreAttackRollConfig);
   Hooks.on("midi-qol.AttackRollComplete", onAttackRollComplete);
   Hooks.on("midi-qol.preDamageRoll",      onPreDamageRoll);
   Hooks.on("combatTurnChange",            onCombatTurnChange);
