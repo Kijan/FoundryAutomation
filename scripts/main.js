@@ -1,12 +1,20 @@
+// =========================================================================
+// LOUD CONSOLE WARNING (Zeigt sofort an, ob das Modul überhaupt geladen ist!)
+// =========================================================================
+console.warn("%c=======================================================", "color: yellow; font-weight: bold; font-size: 14px;");
+console.warn("%c[Nisras Combat Helper] SKRIPT ERFOLGREICH GELADEN!", "color: yellow; font-weight: bold; font-size: 14px;");
+console.warn("%cWenn du diese Zeile in F12 siehst, läuft das Modul im Hintergrund.", "color: lightgreen; font-size: 12px;");
+console.warn("%c=======================================================", "color: yellow; font-weight: bold; font-size: 14px;");
+
 // Interner Status zur Nachverfolgung der Ressourcen und Aktionen pro Runde
 const state = {
   attacksThisRound: 0,
   hitsThisRound: 0,
   brutalStrikeUsedThisAttack: false,
-  brutalStrikeEffectChosen: null, // "forceful", "hamstring" oder null
+  brutalStrikeEffectChosen: null, 
 };
 
-// Zurücksetzen des Status beim Rundenwechsel (bevorzugt am Start von Nisras' Zug)
+// Zurücksetzen des Status beim Rundenwechsel (am Start von Nisras' Zug)
 Hooks.on("updateCombat", (combat, update, options, userId) => {
   if (update.round !== undefined || update.turn !== undefined) {
     const activeCombatant = combat.combatant;
@@ -30,7 +38,7 @@ Hooks.on("deleteCombat", () => {
   console.log("[Nisras Combat Helper] Status nach Kampfende zurückgesetzt.");
 });
 
-// Hilfsfunktion: Sucht nach dem Schadenseffekt (entweder direkt auf dem Actor oder auf einem Item)
+// Hilfsfunktion: Sucht nach dem Schadenseffekt
 function findBrutalStrikeEffect(actor) {
   let effect = actor.effects.find(e => (e.name || e.label) === "Reckless Attack: Brutal Strike Damage");
   if (effect) return effect;
@@ -42,64 +50,34 @@ function findBrutalStrikeEffect(actor) {
   return null;
 }
 
-// Haupt-Schnittstelle vor der Angriffs-Konfiguration
-Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
-  const actor = workflow.actor;
-  if (!actor) return;
-
-  // 1. SCHRITT: Namensprüfung (Fehlertolerant)
+// Gemeinsame Logik für Angriffsprüfungen (wird von Midi-QOL und nativem dnd5e aufgerufen)
+async function processNisrasAttack(actor, item, activity, tracker, suppressAdvantageCallback) {
   const actorNameNormalized = actor.name.trim().toLowerCase();
-  
-  // Debug-Log für jeden Angriffsversuch im Spiel
-  console.log(`[Nisras Combat Helper] Hook 'preAttackConfig' gefeuert von Actor: "${actor.name}"`);
+  if (actorNameNormalized !== "nisras") return;
 
-  if (actorNameNormalized !== "nisras") {
-    console.log(`[Nisras Combat Helper] Hook ignoriert: Name ist nicht "nisras" (Erkannt: "${actorNameNormalized}")`);
-    return;
-  }
+  // Typ und Attribut ermitteln
+  const actionType = activity?.actionType || item?.system?.actionType;
+  const rawAbility = activity?.attack?.ability || activity?.ability || item?.abilityMod || item?.system?.ability;
 
-  // 2. SCHRITT: Typ des Angriffs ermitteln (mwak, rwak etc.)
-  const actionType = workflow.activity?.actionType 
-                  || workflow.item?.system?.actionType 
-                  || (workflow.activity?.type === "attack" ? "mwak" : null);
-
-  // 3. SCHRITT: Attribut ermitteln (Stärke, Geschicklichkeit etc.)
-  const rawAbility = workflow.activity?.attack?.ability 
-                  || workflow.activity?.ability 
-                  || workflow.item?.abilityMod 
-                  || workflow.item?.system?.ability;
-
-  // Intelligentere Erkennung: Wenn das Attribut leer/default ist, aber die Waffe kein Finesse ("fin") hat, ist es Stärke
-  const isFinesse = workflow.item?.system?.properties?.has?.("fin") || false;
+  const isFinesse = item?.system?.properties?.has?.("fin") || false;
   const isStrengthAttack = (rawAbility === "str") || (!rawAbility && !isFinesse);
 
-  console.log(`[Nisras Combat Helper] Prüfe Angriffsdaten:`, {
-    item: workflow.item?.name,
+  console.log(`[Nisras Combat Helper] Prüfe Angriff:`, {
+    item: item?.name,
     actionType: actionType,
     rawAbility: rawAbility,
-    isFinesse: isFinesse,
     isStrengthAttack: isStrengthAttack
   });
 
-  // Filter: Nur Stärke-Nahkampfangriffe zulassen
-  if (actionType !== "mwak") {
-    console.log(`[Nisras Combat Helper] Abgebrochen: Kein Nahkampf-Waffenangriff (mwak). Typ ist: "${actionType}"`);
+  if (actionType !== "mwak" || !isStrengthAttack) {
+    console.log(`[Nisras Combat Helper] Abgebrochen: Kein Stärke-Nahkampfangriff.`);
     return;
   }
 
-  if (!isStrengthAttack) {
-    console.log(`[Nisras Combat Helper] Abgebrochen: Angriff nutzt kein Stärke-Attribut.`);
-    return;
-  }
-
-  console.log(`[Nisras Combat Helper] Kriterien erfüllt! Starte Abfrage-Workflow...`);
-
-  // Falls außerhalb eines Kampfes getestet wird, ignorieren wir die Runden-Limits für einfacheres Testen
+  console.log(`[Nisras Combat Helper] Kriterien erfüllt! Starte Dialog-Kette...`);
   const currentAttacks = game.combat ? state.attacksThisRound : 0;
 
-  // ==========================================
-  // ABLAUF 1: RAGE CHECK
-  // ==========================================
+  // 1. RAGE CHECK
   const isRaging = actor.effects.some(e => !e.disabled && ((e.name || e.label) === "Rage"));
   const rageItem = actor.items.find(i => i.name === "Rage");
   const hasRageCharges = rageItem ? (rageItem.system.uses?.value > 0) : false;
@@ -114,15 +92,13 @@ Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
     });
 
     if (useRage && rageItem) {
-      console.log("[Nisras Combat Helper] Zünde Rage...");
+      console.log("[Nisras Combat Helper] Aktiviere Rage...");
       await MidiQOL.completeItemUse(rageItem);
-      await new Promise(r => setTimeout(r, 500)); // Datenbank-Synchronisierung abwarten
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 
-  // ==========================================
-  // ABLAUF 2: RECKLESS ATTACK CHECK
-  // ==========================================
+  // 2. RECKLESS ATTACK CHECK
   const updatedRaging = actor.effects.some(e => !e.disabled && ((e.name || e.label) === "Rage"));
   const isReckless = actor.effects.some(e => !e.disabled && ((e.name || e.label) === "Attacking Recklessly"));
   const recklessItem = actor.items.find(i => i.name === "Reckless Attack");
@@ -137,17 +113,14 @@ Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
     });
 
     if (useReckless) {
-      console.log("[Nisras Combat Helper] Zünde Reckless Attack...");
+      console.log("[Nisras Combat Helper] Aktiviere Reckless...");
       await MidiQOL.completeItemUse(recklessItem);
       await new Promise(r => setTimeout(r, 500));
     }
   }
 
-  // ==========================================
-  // ABLAUF 3: BRUTAL STRIKE CHECK
-  // ==========================================
+  // 3. BRUTAL STRIKE CHECK
   const finalReckless = actor.effects.some(e => !e.disabled && ((e.name || e.label) === "Attacking Recklessly"));
-  const tracker = workflow.attackRollModifierTracker || workflow.tracker;
   const hasDisadvantage = tracker ? tracker.hasDisadvantage : false;
 
   if (finalReckless && !hasDisadvantage) {
@@ -160,11 +133,8 @@ Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
     });
 
     if (useBrutal) {
-      console.log("[Nisras Combat Helper] Brutal Strike gewählt. Neutralisiere Vorteil...");
-      // Vorteil über Midi-QOL RollModifierTracker aufheben (Angriff wird normal gewürfelt)
-      if (tracker) {
-        tracker.advantage.suppress("Brutal Strike", "Brutal Strike (Vorteil aufgegeben)");
-      }
+      console.log("[Nisras Combat Helper] Brutal Strike gewählt. Vorteil wird aufgegeben...");
+      suppressAdvantageCallback();
 
       // Effektauswahl
       const effectChosen = await new Promise((resolve) => {
@@ -172,18 +142,9 @@ Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
           title: "Zusatzeffekt wählen",
           content: "<p>Wähle deinen Brutal Strike Effekt:</p>",
           buttons: {
-            forceful: {
-              label: "Forceful Blow (15ft Push)",
-              callback: () => resolve("forceful")
-            },
-            hamstring: {
-              label: "Hamstring Blow (-15ft Speed)",
-              callback: () => resolve("hamstring")
-            },
-            none: {
-              label: "Keiner",
-              callback: () => resolve(null)
-            }
+            forceful: { label: "Forceful Blow (15ft Push)", callback: () => resolve("forceful") },
+            hamstring: { label: "Hamstring Blow (-15ft Speed)", callback: () => resolve("hamstring") },
+            none: { label: "Keiner", callback: () => resolve(null) }
           },
           default: "forceful",
           close: () => resolve(null)
@@ -193,7 +154,7 @@ Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
       state.brutalStrikeUsedThisAttack = true;
       state.brutalStrikeEffectChosen = effectChosen;
 
-      // Schadenseffekt "+1d10" vor dem Wurf aktivieren
+      // Schadenseffekt aktivieren
       const bsDamageEffect = findBrutalStrikeEffect(actor);
       if (bsDamageEffect) {
         await bsDamageEffect.update({ disabled: false });
@@ -207,23 +168,60 @@ Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
   if (game.combat) {
     state.attacksThisRound++;
   }
+}
+
+// MIDI-QOL ANBINDUNG
+Hooks.on("midi-qol.preAttackConfig", async (workflow) => {
+  const tracker = workflow.attackRollModifierTracker || workflow.tracker;
+  await processNisrasAttack(
+    workflow.actor, 
+    workflow.item, 
+    workflow.activity, 
+    tracker, 
+    () => {
+      if (tracker) tracker.advantage.suppress("Brutal Strike", "Brutal Strike (Vorteil aufgegeben)");
+    }
+  );
 });
 
-// Logik nach Abwicklung des Angriffs und Schadens
+// NATIVE DND5E V4/V5 ANBINDUNG (Falls Midi-QOL auf dem Char umgangen wird)
+Hooks.on("dnd5e.preRollAttackV2", async (config, dialog, message) => {
+  const actor = config.subject?.actor || config.actor;
+  const activity = config.subject; // in dnd5e v4/v5 ist subject meist die Activity
+  const item = activity?.item;
+
+  if (!actor) return;
+
+  await processNisrasAttack(
+    actor,
+    item,
+    activity,
+    config, // config hält im dnd5e Roll-System evtl. Disadvantage-Daten
+    () => {
+      // Vorteil im nativen dnd5e RollConfig-Dialog auf Normal zurückstufen
+      if (config.rolls && config.rolls[0]) {
+        config.rolls[0].advantage = false;
+        config.rolls[0].mode = 0; // 0 = Normal, 1 = Advantage, -1 = Disadvantage
+      }
+    }
+  );
+});
+
+// Logik nach Abwicklung des Angriffs und Schadens (MIDI-QOL)
 Hooks.on("midi-qol.RollComplete", async (workflow) => {
   const actor = workflow.actor;
   if (!actor || actor.name.trim().toLowerCase() !== "nisras") return;
 
-  // Cleanup: Schadenseffekt (+1d10) nach dem Wurf sofort wieder deaktivieren
+  // Schadenseffekt (+1d10) deaktivieren
   const bsDamageEffect = findBrutalStrikeEffect(actor);
   if (bsDamageEffect && !bsDamageEffect.disabled) {
     await bsDamageEffect.update({ disabled: true });
-    console.log("[Nisras Combat Helper] Brutal Strike Damage-Effekt (+1d10) wieder deaktiviert.");
+    console.log("[Nisras Combat Helper] Brutal Strike Damage-Effekt wieder deaktiviert.");
   }
 
   const hit = workflow.hitTargets.size > 0;
 
-  // Brutal Strike Effekte bei Treffer auslösen
+  // Brutal Strike Effekte bei Treffer
   if (state.brutalStrikeUsedThisAttack && hit) {
     const attackerToken = workflow.token;
 
@@ -258,13 +256,9 @@ Hooks.on("midi-qol.RollComplete", async (workflow) => {
               priority: 20
             }
           ],
-          duration: {
-            turns: 1
-          },
+          duration: { turns: 1 },
           flags: {
-            dae: {
-              specialDuration: ["turnStartSource"] // Erlischt zu Beginn von Nisras' nächstem Zug
-            }
+            dae: { specialDuration: ["turnStartSource"] }
           },
           origin: actor.uuid
         };
@@ -288,12 +282,11 @@ Hooks.on("midi-qol.RollComplete", async (workflow) => {
     }
   }
 
-  // Reset des Angriffsstatus
   state.brutalStrikeUsedThisAttack = false;
   state.brutalStrikeEffectChosen = null;
 });
 
-// Listener für den Forceful-Blow Chat-Button (Fremdbewegung benötigt GM-Rechte)
+// Listener für den Forceful-Blow Chat-Button
 Hooks.on("renderChatMessage", (message, html, data) => {
   const btn = html.find(".nisras-push-btn");
   if (btn.length > 0) {
