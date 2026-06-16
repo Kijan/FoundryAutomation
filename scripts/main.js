@@ -1,5 +1,5 @@
 // ============================================================
-// Nisras Barbarian Automation v2.0
+// Nisras Barbarian Automation v2.1
 // ============================================================
 // Automatisiert für den Barbaren "Nisras":
 //   - Rage Erinnerung/Aktivierung
