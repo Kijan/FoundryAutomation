@@ -3,7 +3,7 @@
 // =========================================================================
 console.warn("%c=======================================================", "color: yellow; font-weight: bold; font-size: 14px;");
 console.warn("%c[Nisras Combat Helper] SKRIPT ERFOLGREICH GELADEN!", "color: yellow; font-weight: bold; font-size: 14px;");
-console.warn("%cDer Angriffs-Workflow wird nun bei 'preAttackRoll' pausiert.", "color: lightgreen; font-size: 12px;");
+console.warn("%cTriple-Fail-Safe für Brutal Strike Vorteil-Deaktivierung aktiv.", "color: lightgreen; font-size: 12px;");
 console.warn("%c=======================================================", "color: yellow; font-weight: bold; font-size: 14px;");
 
 // Interner Status zur Nachverfolgung der Ressourcen und Aktionen pro Runde
@@ -11,10 +11,11 @@ const state = {
   attacksThisRound: 0,
   hitsThisRound: 0,
   brutalStrikeUsedThisAttack: false,
-  brutalStrikeEffectChosen: null, // "forceful", "hamstring" oder null
+  brutalStrikeEffectChosen: null,
+  recklessEffectTemporarilyDisabled: false, // Sicherheits-Tracker für Reckless-Abschaltung
 };
 
-// Zurücksetzen des Status beim Rundenwechsel (bevorzugt am Start von Nisras' Zug)
+// Zurücksetzen des Status beim Rundenwechsel (am Start von Nisras' Zug)
 Hooks.on("updateCombat", (combat, update, options, userId) => {
   if (update.round !== undefined || update.turn !== undefined) {
     const activeCombatant = combat.combatant;
@@ -38,7 +39,7 @@ Hooks.on("deleteCombat", () => {
   console.log("[Nisras Combat Helper] Status nach Kampfende zurückgesetzt.");
 });
 
-// Hilfsfunktion: Sucht nach dem Schadenseffekt (entweder direkt auf dem Actor oder auf einem Item)
+// Hilfsfunktion: Sucht nach dem Schadenseffekt
 function findBrutalStrikeEffect(actor) {
   let effect = actor.effects.find(e => (e.name || e.label) === "Reckless Attack: Brutal Strike Damage");
   if (effect) return effect;
@@ -50,18 +51,42 @@ function findBrutalStrikeEffect(actor) {
   return null;
 }
 
+// Zentrale, sichere Aufräumfunktion (stellt Reckless wieder her und schaltet Schadenseffekt aus)
+async function cleanupBrutalStrike(actor) {
+  if (!actor) return;
+
+  // 1. Reckless Attack Active Effect wieder aktivieren
+  if (state.recklessEffectTemporarilyDisabled) {
+    const recklessEffect = actor.effects.find(e => e.disabled && ((e.name || e.label) === "Attacking Recklessly"));
+    if (recklessEffect) {
+      await recklessEffect.update({ disabled: false });
+      console.log("[Nisras Combat Helper] Safety: Effekt 'Attacking Recklessly' wieder aktiviert.");
+    }
+    state.recklessEffectTemporarilyDisabled = false;
+  }
+
+  // 2. In-Memory Flags im Arbeitsspeicher löschen
+  foundry.utils.setProperty(actor, "flags.midi-qol.noAdvantage.attack.mwak", false);
+  foundry.utils.setProperty(actor, "flags.midi-qol.noAdvantage.attack.all", false);
+
+  // 3. Brutal Strike Schadenseffekt deaktivieren
+  const bsDamageEffect = findBrutalStrikeEffect(actor);
+  if (bsDamageEffect && !bsDamageEffect.disabled) {
+    await bsDamageEffect.update({ disabled: true });
+    console.log("[Nisras Combat Helper] Brutal Strike Damage-Effekt (+1d10) wieder deaktiviert.");
+  }
+}
+
 // =========================================================================
-// ASYNCHRONER HOOK: Pausiert den Wurf, bevor Midi-QOL die Würfel triggert
+// ASYNCHRONER HOOK: Pausiert den Wurf vor den Würfeln
 // =========================================================================
 Hooks.on("midi-qol.preAttackRoll", async (...args) => {
-  // Kompatibilitäts-Weiche für verschiedene Midi-QOL Signaturen: (item, workflow) oder (workflow)
   let workflow = args.length === 2 ? args[1] : args[0];
   if (!workflow) return;
 
   const actor = workflow.actor;
   if (!actor) return;
 
-  // Namensprüfung (Fehlertolerant)
   const actorNameNormalized = actor.name.trim().toLowerCase();
   if (actorNameNormalized !== "nisras") return;
 
@@ -76,7 +101,6 @@ Hooks.on("midi-qol.preAttackRoll", async (...args) => {
   const isStrengthAttack = (rawAbility === "str") || (!rawAbility && !isFinesse);
 
   if (actionType !== "mwak" || !isStrengthAttack) {
-    console.log(`[Nisras Combat Helper] Ignoriere Angriff: Kein Nahkampf-Stärkeangriff.`);
     return;
   }
 
@@ -100,7 +124,7 @@ Hooks.on("midi-qol.preAttackRoll", async (...args) => {
     if (useRage && rageItem) {
       console.log("[Nisras Combat Helper] Aktiviere Rage...");
       await MidiQOL.completeItemUse(rageItem);
-      await new Promise(r => setTimeout(r, 500)); // Datenbank-Synchronisierung abwarten
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 
@@ -140,27 +164,32 @@ Hooks.on("midi-qol.preAttackRoll", async (...args) => {
     });
 
     if (useBrutal) {
-      console.log("[Nisras Combat Helper] Brutal Strike gewählt. Erzeuge Unterdrückungs-Effekt...");
+      console.log("[Nisras Combat Helper] Brutal Strike gewählt. Starte Triple-Sperre für Vorteil...");
 
-      // Erzeuge temporären DAE-Effekt, um Vorteil für diesen einen Angriff zu unterdrücken
-      const tempEffectData = {
-        name: "Brutal Strike Suppression",
-        img: "icons/skills/melee/strike-blade-slashing-blue.webp",
-        changes: [
-          {
-            key: "flags.midi-qol.noAdvantage.attack.mwak",
-            mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE,
-            value: "1",
-            priority: 100
-          }
-        ],
-        flags: {
-          dae: {
-            specialDuration: ["1Attack"] // Löscht sich nach dem aktuellen Angriff vollautomatisch selbst!
-          }
-        }
-      };
-      await actor.createEmbeddedDocuments("ActiveEffect", [tempEffectData]);
+      // STUFE 1: Temporäre Deaktivierung des "Attacking Recklessly" Effekts
+      const recklessEffect = actor.effects.find(e => !e.disabled && ((e.name || e.label) === "Attacking Recklessly"));
+      if (recklessEffect) {
+        await recklessEffect.update({ disabled: true });
+        state.recklessEffectTemporarilyDisabled = true;
+        console.log("[Nisras Combat Helper] Effekt 'Attacking Recklessly' temporär deaktiviert.");
+      }
+
+      // STUFE 2: Direktes In-Memory-Sperrflag im Actor setzen (Keine DB-Verzögerung)
+      foundry.utils.setProperty(workflow.actor, "flags.midi-qol.noAdvantage.attack.mwak", true);
+      foundry.utils.setProperty(workflow.actor, "flags.midi-qol.noAdvantage.attack.all", true);
+
+      // STUFE 3: Workflow-Zwang (Erzwingt Normal-Wurf)
+      workflow.advantage = false;
+      workflow.noAdvantage = true;
+      if (workflow.rollOptions) {
+        workflow.rollOptions.advantage = false;
+        workflow.rollOptions.disadvantage = false;
+      }
+
+      // Optionale Tracker-Sperrung falls vorhanden
+      if (tracker) {
+        tracker.advantage.suppress("Brutal Strike", "Brutal Strike (Vorteil aufgegeben)");
+      }
 
       // Effektauswahl
       const effectChosen = await new Promise((resolve) => {
@@ -203,13 +232,6 @@ Hooks.on("midi-qol.RollComplete", async (workflow) => {
   const actor = workflow.actor;
   if (!actor || actor.name.trim().toLowerCase() !== "nisras") return;
 
-  // Cleanup: Schadenseffekt (+1d10) nach dem Wurf sofort wieder deaktivieren
-  const bsDamageEffect = findBrutalStrikeEffect(actor);
-  if (bsDamageEffect && !bsDamageEffect.disabled) {
-    await bsDamageEffect.update({ disabled: true });
-    console.log("[Nisras Combat Helper] Brutal Strike Damage-Effekt (+1d10) wieder deaktiviert.");
-  }
-
   const hit = workflow.hitTargets.size > 0;
 
   // Brutal Strike Effekte bei Treffer auslösen
@@ -218,7 +240,6 @@ Hooks.on("midi-qol.RollComplete", async (workflow) => {
 
     for (let targetToken of workflow.hitTargets) {
       if (state.brutalStrikeEffectChosen === "forceful") {
-        // Chat-Button für den GM generieren
         const content = `
           <div class="nisras-push-card" style="border: 1px solid #7a7975; padding: 8px; border-radius: 5px; background: rgba(0,0,0,0.1);">
             <p><strong>Brutal Strike: Forceful Blow!</strong></p>
@@ -237,7 +258,6 @@ Hooks.on("midi-qol.RollComplete", async (workflow) => {
           speaker: ChatMessage.getSpeaker({ actor: actor })
         });
       } else if (state.brutalStrikeEffectChosen === "hamstring") {
-        // Speed-Reduzierung um 15ft via Active Effect auf das Ziel
         const effectData = {
           name: "Hamstring Blow",
           img: "icons/svg/falling.svg",
@@ -277,9 +297,20 @@ Hooks.on("midi-qol.RollComplete", async (workflow) => {
     }
   }
 
+  // Cleanup am Ende des regulären Workflows
+  await cleanupBrutalStrike(actor);
+
   // Reset des Angriffsstatus
   state.brutalStrikeUsedThisAttack = false;
   state.brutalStrikeEffectChosen = null;
+});
+
+// Sicherheits-Cleanup bei vorzeitigem Abbruch des Angriffs
+Hooks.on("midi-qol.postCleanup", async (workflow) => {
+  const actor = workflow.actor;
+  if (!actor || actor.name.trim().toLowerCase() !== "nisras") return;
+  
+  await cleanupBrutalStrike(actor);
 });
 
 // Listener für den Forceful-Blow Chat-Button (Fremdbewegung benötigt GM-Rechte)
