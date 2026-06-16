@@ -92,13 +92,49 @@ function hasAttackDisadvantageCondition(actor) {
     .some(([id]) => actor.statuses.has(id));
 }
 
-// noAdvantage Flag setzen/entfernen (unterdrückt Reckless-Advantage zuverlässig)
-async function setNoAdvantageFlag(actor, value) {
-  if (value) {
-    await actor.setFlag("midi-qol", "noAdvantage.attack.mwak", true);
-  } else {
-    await actor.unsetFlag("midi-qol", "noAdvantage.attack.mwak");
+// Erzwingt NORMAL-Wurf im dnd5e.preRollAttack Hook.
+// Notwendig weil AC5E die Advantage-Attribution direkt aus dem Midi-Tracker liest
+// und ein simples suppress() die Attribution nicht entfernt.
+function forceNormalAttackRoll(config, dialog) {
+  const ADV = CONFIG.Dice.D20Roll.ADV_MODE;
+  const wf = config.workflow;
+
+  // 1. Midi-Tracker Advantage komplett entfernen (active + Attribution)
+  const tracker = wf?.attackRollModifierTracker;
+  if (tracker) {
+    tracker.advantage.clear();
+    if (tracker.attribution?.ADV) delete tracker.attribution.ADV;
   }
+
+  // 2. AC5E roll-config bereinigen
+  const r0 = config.rolls?.[0]?.options;
+  if (r0) {
+    r0.advantage = false;
+    r0.advantageMode = ADV.NORMAL;
+    r0.defaultButton = "normal";
+    const ac5e = r0["automated-conditions-5e"];
+    if (ac5e) {
+      ac5e.advantageMode = ADV.NORMAL;
+      ac5e.defaultButton = "normal";
+      ac5e.proposedButton = "normal";
+      ac5e.calculatedDefaultButton = "normal";
+      ac5e.hasTransitAdvantage = false;
+      if (ac5e.subject) { ac5e.subject.advantage = []; ac5e.subject.midiAdvantage = []; }
+      if (ac5e.transientRollState) {
+        ac5e.transientRollState.advantageMode = ADV.NORMAL;
+        ac5e.transientRollState.defaultButton = "normal";
+        ac5e.transientRollState.hasTransitAdvantage = false;
+      }
+    }
+  }
+
+  // 3. Dialog-Vorauswahl
+  if (dialog?.options) {
+    dialog.options.advantageMode = ADV.NORMAL;
+    dialog.options.defaultButton = "normal";
+  }
+
+  config.advantage = false;
 }
 
 // ============================================================
@@ -184,7 +220,6 @@ async function onPreItemRoll(data) {
 
   // --- 3. Brutal Strike (jeder Angriff, wenn Reckless aktiv und kein Disadvantage) ---
   state.brutalChoice = null;
-  await setNoAdvantageFlag(actor, false); // sicherheitshalber zurücksetzen
   const brutalEffect = findItemEffect(actor, NAMES.brutalEffect);
   if (brutalEffect && !brutalEffect.disabled) await brutalEffect.update({ disabled: true });
 
@@ -195,8 +230,7 @@ async function onPreItemRoll(data) {
     );
     if (doBrutal) {
       state.brutalChoice = await askBrutalStrikeEffect();
-      // Advantage unterdrücken via Flag — wird in checkAttackAdvantage() berücksichtigt
-      await setNoAdvantageFlag(actor, true);
+      // Advantage-Unterdrückung passiert im dnd5e.preRollAttack Hook (forceNormalAttackRoll)
       // 1d10 Bonus-Schaden Effekt aktivieren
       if (brutalEffect) await brutalEffect.update({ disabled: false });
     }
@@ -213,9 +247,6 @@ async function onAttackRollComplete(workflow) {
   const actor = workflow.actor;
   if (!isNisras(actor)) return;
   if (workflow.activity?.actionType !== "mwak") return;
-
-  // noAdvantage Flag immer nach dem Angriff entfernen
-  await setNoAdvantageFlag(actor, false);
 
   // Bei Miss: Brutal Strike Effekt deaktivieren und Wahl verwerfen
   if (!workflow.hitTargets?.size && state.brutalChoice !== null) {
@@ -346,7 +377,6 @@ async function onCombatTurnChange(combat) {
     const actor = combatant.actor;
     if (!isNisras(actor)) continue;
     state.resetTurn();
-    await setNoAdvantageFlag(actor, false);
     await actor.unsetFlag("world", "barbarianForcefulBlowTarget").catch(() => {});
   }
 }
@@ -379,12 +409,21 @@ function onRenderChatMessageHTML(message, html) {
 // Initialisierung
 // ============================================================
 
+// dnd5e.preRollAttack — erzwingt NORMAL wenn Brutal Strike gewählt wurde
+function onDnd5ePreRollAttack(config, dialog, message) {
+  const actor = config.workflow?.actor ?? config.subject?.actor;
+  if (!isNisras(actor)) return;
+  if (state.brutalChoice === null) return;
+  forceNormalAttackRoll(config, dialog);
+}
+
 Hooks.once("ready", () => {
   Hooks.on("midi-qol.preItemRoll",        onPreItemRoll);
+  Hooks.on("dnd5e.preRollAttack",         onDnd5ePreRollAttack);
   Hooks.on("midi-qol.AttackRollComplete", onAttackRollComplete);
   Hooks.on("midi-qol.preDamageRoll",      onPreDamageRoll);
   Hooks.on("combatTurnChange",            onCombatTurnChange);
   Hooks.on("renderChatMessageHTML",       onRenderChatMessageHTML);
 
-  console.log(`${MODULE_ID} | v2.0 geladen und Hooks registriert`);
+  console.log(`${MODULE_ID} | v2.1 geladen und Hooks registriert`);
 });
