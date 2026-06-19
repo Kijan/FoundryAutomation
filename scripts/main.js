@@ -14,7 +14,7 @@
 //     Special Duration "1 Attack". Das Modul aktiviert ihn nur.
 // ============================================================
 
-const MODULE_ID = "foundry-automation";
+const MODULE_ID = "nisras-automation";
 const ACTOR_NAME = "Nisras";
 
 const NAMES = {
@@ -181,10 +181,10 @@ async function onPreItemRoll(data) {
 }
 
 // ============================================================
-// preDamageRoll — Forceful / Hamstring bei Treffer
+// DamageRollComplete — Forceful / Hamstring NACH dem Damage-Roll
 // ============================================================
 
-async function onPreDamageRoll(workflow) {
+async function onDamageRollComplete(workflow) {
   const actor = workflow.actor;
   if (!isNisras(actor)) return;
   if (workflow.activity?.actionType !== "mwak") return;
@@ -319,7 +319,7 @@ function onRenderChatMessageHTML(message, html) {
 
 Hooks.once("ready", () => {
   Hooks.on("midi-qol.preItemRoll",      onPreItemRoll);
-  Hooks.on("midi-qol.preDamageRoll",    onPreDamageRoll);
+  Hooks.on("midi-qol.DamageRollComplete", onDamageRollComplete);
   Hooks.on("combatTurnChange",          onCombatTurnChange);
   Hooks.on("renderChatMessageHTML",     onRenderChatMessageHTML);
 
