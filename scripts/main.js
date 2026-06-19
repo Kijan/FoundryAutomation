@@ -1,5 +1,5 @@
 // ============================================================
-// Nisras Barbarian Automation v2.0
+// Automation in Foundry VTT 
 // ============================================================
 // Automatisiert für den Barbaren "Nisras":
 //   - Rage Erinnerung/Aktivierung
@@ -10,7 +10,7 @@
 //   - Hamstring Blow (Speed -15ft Effekt)
 // ============================================================
 
-const MODULE_ID = "nisras-automation";
+const MODULE_ID = "foundry-automation";
 const ACTOR_NAME = "Nisras";
 
 // Namen der relevanten Items/Effekte (zentral, falls sie sich ändern)
@@ -47,13 +47,15 @@ const state = {
   },
 
   isFirstAttackThisTurn() {
-    return this.lastAttackRound !== (game.combat?.round ?? null)
-        || this.lastAttackTurn  !== (game.combat?.turn  ?? null);
+    if (!game.combat) return true; // Ausserhalb des Kampfes immer erlauben (Tests, Ueberraschungsangriff)
+    return this.lastAttackRound !== game.combat.round
+        || this.lastAttackTurn  !== game.combat.turn;
   },
 
   markAttackThisTurn() {
-    this.lastAttackRound = game.combat?.round ?? null;
-    this.lastAttackTurn  = game.combat?.turn  ?? null;
+    if (!game.combat) return;
+    this.lastAttackRound = game.combat.round;
+    this.lastAttackTurn  = game.combat.turn;
   }
 };
 
@@ -73,7 +75,11 @@ function getRageUses(actor) {
   return actor.items.getName(NAMES.rage)?.system.uses?.value ?? 0;
 }
 
-function findItemEffect(actor, name) {
+function findEffect(actor, name) {
+  // 1. Direkt auf dem Actor suchen (z.B. von DAE uebertragene Effekte)
+  const onActor = actor.effects.find(e => e.name === name);
+  if (onActor) return onActor;
+  // 2. Fallback: auf den Items suchen
   return actor.items.contents
     .flatMap(i => i.effects.contents)
     .find(e => e.name === name);
@@ -177,7 +183,7 @@ async function onPreItemRoll(data) {
 
   // --- 3. Brutal Strike (jeder Angriff, wenn Reckless aktiv und kein Disadvantage) ---
   state.brutalChoice = null;
-  const brutalEffect = findItemEffect(actor, NAMES.brutalEffect);
+  const brutalEffect = findEffect(actor, NAMES.brutalEffect);
   if (brutalEffect && !brutalEffect.disabled) await brutalEffect.update({ disabled: true });
 
   if (recklessActive && !hasAttackDisadvantageCondition(actor)) {
@@ -221,7 +227,7 @@ async function onAttackRollComplete(workflow) {
 
   // Bei Miss: Brutal Strike Effekt deaktivieren und Wahl verwerfen
   if (!workflow.hitTargets?.size && state.brutalChoice !== null) {
-    const brutalEffect = findItemEffect(actor, NAMES.brutalEffect);
+    const brutalEffect = findEffect(actor, NAMES.brutalEffect);
     if (brutalEffect && !brutalEffect.disabled) await brutalEffect.update({ disabled: true });
     state.brutalChoice = null;
   }
@@ -269,7 +275,7 @@ async function onPreDamageRoll(workflow) {
 function scheduleBrutalCleanup(actor, workflowId) {
   Hooks.once("midi-qol.DamageRollComplete", async (wf) => {
     if (wf.id !== workflowId) return;
-    const brutalEffect = findItemEffect(actor, NAMES.brutalEffect);
+    const brutalEffect = findEffect(actor, NAMES.brutalEffect);
     if (brutalEffect && !brutalEffect.disabled) await brutalEffect.update({ disabled: true });
     state.brutalChoice = null;
   });
@@ -291,8 +297,17 @@ async function applyForcefulBlow(actor, attackerToken, targetToken) {
   const dy = ty - ay;
   const len = Math.sqrt(dx * dx + dy * dy) || 1;
 
-  const newX = targetToken.x + (dx / len) * pushPx;
-  const newY = targetToken.y + (dy / len) * pushPx;
+  const rawX = targetToken.x + (dx / len) * pushPx;
+  const rawY = targetToken.y + (dy / len) * pushPx;
+
+  // An das Grid snappen (Center-basiert, wie Midi es intern macht)
+  const half = (canvas.grid.size * (targetToken.document.width ?? 1)) / 2;
+  const snappedCenter = canvas.grid.getSnappedPoint(
+    { x: rawX + half, y: rawY + half },
+    { mode: CONST.GRID_SNAPPING_MODES.CENTER }
+  );
+  const newX = snappedCenter.x - half;
+  const newY = snappedCenter.y - half;
 
   await actor.setFlag("world", "barbarianForcefulBlowTarget", {
     tokenUuid: targetToken.document.uuid,
@@ -340,6 +355,23 @@ async function applyHamstringBlow(actor, targetToken) {
 }
 
 // ============================================================
+// postCleanup — Sicherheitsleine: Reckless nach Wurf-Abbruch reaktivieren
+// ============================================================
+
+async function onPostCleanup(workflow) {
+  const actor = workflow?.actor;
+  if (!isNisras(actor)) return;
+
+  // Falls "Attacking Recklessly" fuer Brutal deaktiviert wurde aber AttackRollComplete
+  // nie kam (z.B. Dialog abgebrochen), hier reaktivieren.
+  if (state.recklessDisabledForBrutal) {
+    const recklessEff = actor.effects.find(e => e.name === NAMES.recklessEffect && e.disabled);
+    if (recklessEff) await recklessEff.update({ disabled: false });
+    state.recklessDisabledForBrutal = false;
+  }
+}
+
+// ============================================================
 // combatTurnChange — Zustand pro Zug zurücksetzen
 // ============================================================
 
@@ -384,8 +416,9 @@ Hooks.once("ready", () => {
   Hooks.on("midi-qol.preItemRoll",        onPreItemRoll);
   Hooks.on("midi-qol.AttackRollComplete", onAttackRollComplete);
   Hooks.on("midi-qol.preDamageRoll",      onPreDamageRoll);
+  Hooks.on("midi-qol.postCleanup",        onPostCleanup);
   Hooks.on("combatTurnChange",            onCombatTurnChange);
   Hooks.on("renderChatMessageHTML",       onRenderChatMessageHTML);
 
-  console.log(`${MODULE_ID} | v2.3 geladen und Hooks registriert`);
+  console.log(`${MODULE_ID} | v2.4 geladen und Hooks registriert`);
 });
