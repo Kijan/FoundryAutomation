@@ -1,10 +1,12 @@
 // ============================================================
-// FoundryAutomation — Nisras Barbarian
+// FoundryAutomation — Barbarian Combat Automation
 // ============================================================
 // Schlanke Version: Die Mechanik (Schaden, noAdvantage, Ablaufen)
 // liegt in Active Effects + DAE Special Durations. Das Modul ist
 // nur noch der "Dirigent": Dialoge zeigen, Features ausloesen,
 // den Brutal-Strike-Effekt aktivieren, Forceful/Hamstring anwenden.
+//
+// Aktiv fuer jeden Actor mit dem Feature-Identifier "reckless-attack".
 //
 // Voraussetzungen (ausserhalb des Moduls konfiguriert):
 //   - Feature "Reckless Attack": loest beim Aktivieren auch Frenzy aus
@@ -15,7 +17,11 @@
 // ============================================================
 
 const MODULE_ID = "foundry-automation";
-const ACTOR_NAME = "Nisras";
+// Feature-Identifier (lokalisierungsunabhaengig) — bestimmt ob ein Actor
+// vom Modul automatisiert wird. Reckless Attack ist die Grundvoraussetzung.
+const IDENT = {
+  reckless: "reckless-attack"
+};
 
 const NAMES = {
   rage: "Rage",
@@ -56,8 +62,10 @@ const state = {
 // Hilfsfunktionen
 // ============================================================
 
-function isNisras(actor) {
-  return actor?.name === ACTOR_NAME;
+function isEligibleActor(actor) {
+  if (!actor) return false;
+  // Actor wird automatisiert wenn er das Reckless-Attack-Feature besitzt
+  return actor.items.some(i => i.system?.identifier === IDENT.reckless);
 }
 
 function hasEffect(actor, name) {
@@ -132,7 +140,7 @@ function askBrutalStrikeEffect() {
 async function onPreItemRoll(data) {
   const { activity, token } = data;
   const actor = token?.actor;
-  if (!isNisras(actor)) return;
+  if (!isEligibleActor(actor)) return;
   if (activity?.actionType !== "mwak") return;
 
   const firstAttack = state.isFirstAttackThisTurn();
@@ -186,7 +194,7 @@ async function onPreItemRoll(data) {
 
 async function onDamageRollComplete(workflow) {
   const actor = workflow.actor;
-  if (!isNisras(actor)) return;
+  if (!isEligibleActor(actor)) return;
   if (workflow.activity?.actionType !== "mwak") return;
   if (!workflow.hitTargets?.size) return;
 
@@ -287,7 +295,7 @@ async function applyHamstringBlow(actor, targetToken) {
 async function onCombatTurnChange(combat) {
   for (const combatant of combat.combatants) {
     const actor = combatant.actor;
-    if (!isNisras(actor)) continue;
+    if (!isEligibleActor(actor)) continue;
     state.resetTurn();
     await actor.unsetFlag("world", "barbarianForcefulBlowTarget").catch(() => {});
   }
@@ -338,5 +346,5 @@ Hooks.once("ready", () => {
   Hooks.on("combatTurnChange",          onCombatTurnChange);
   Hooks.on("renderChatMessageHTML",     onRenderChatMessageHTML);
 
-  console.log(`${MODULE_ID} | v3.0 (schlank) geladen und Hooks registriert`);
+  console.log(`${MODULE_ID} | v3.1 (feature-basiert) geladen und Hooks registriert`);
 });
