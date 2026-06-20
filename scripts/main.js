@@ -14,7 +14,7 @@
 //     Special Duration "1 Attack". Das Modul aktiviert ihn nur.
 // ============================================================
 
-const MODULE_ID = "nisras-automation";
+const MODULE_ID = "foundry-automation";
 const ACTOR_NAME = "Nisras";
 
 const NAMES = {
@@ -209,21 +209,25 @@ async function onDamageRollComplete(workflow) {
 
 async function applyForcefulBlow(actor, attackerToken, targetToken) {
   const gridSize = canvas.grid.size;
-  const pushPx   = gridSize * 3; // 15ft
+  const PUSH_FIELDS = 3; // 15ft = 3 Felder (D&D: diagonal zaehlt gleich)
 
+  // Richtung als ganzzahlige Grid-Schritte (-1, 0, +1) pro Achse bestimmen.
+  // Dadurch wird diagonal genauso weit geschoben wie gerade (Chebyshev-Distanz).
   const ax = attackerToken.x + attackerToken.w / 2;
   const ay = attackerToken.y + attackerToken.h / 2;
   const tx = targetToken.x + targetToken.w / 2;
   const ty = targetToken.y + targetToken.h / 2;
   const dx = tx - ax;
   const dy = ty - ay;
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
 
-  const rawX = targetToken.x + (dx / len) * pushPx;
-  const rawY = targetToken.y + (dy / len) * pushPx;
+  const stepX = Math.sign(Math.round(dx / gridSize));
+  const stepY = Math.sign(Math.round(dy / gridSize));
+
+  const rawX = targetToken.x + stepX * PUSH_FIELDS * gridSize;
+  const rawY = targetToken.y + stepY * PUSH_FIELDS * gridSize;
 
   // An das Grid snappen (Center-basiert)
-  const half = (canvas.grid.size * (targetToken.document.width ?? 1)) / 2;
+  const half = (gridSize * (targetToken.document.width ?? 1)) / 2;
   const snappedCenter = canvas.grid.getSnappedPoint(
     { x: rawX + half, y: rawY + half },
     { mode: CONST.GRID_SNAPPING_MODES.CENTER }
@@ -318,6 +322,17 @@ function onRenderChatMessageHTML(message, html) {
 // ============================================================
 
 Hooks.once("ready", () => {
+  // Abhaengigkeiten pruefen (zusaetzlich zu relationships.requires in module.json)
+  const missing = [];
+  if (!game.modules.get("midi-qol")?.active) missing.push("Midi-QOL");
+  if (!game.modules.get("dae")?.active)      missing.push("DAE");
+  if (missing.length) {
+    const msg = `${MODULE_ID}: Benötigte Module fehlen oder sind deaktiviert: ${missing.join(", ")}. Automatisierung ist inaktiv.`;
+    console.error(msg);
+    if (game.user.isGM) ui.notifications.error(msg, { permanent: true });
+    return;
+  }
+
   Hooks.on("midi-qol.preItemRoll",      onPreItemRoll);
   Hooks.on("midi-qol.DamageRollComplete", onDamageRollComplete);
   Hooks.on("combatTurnChange",          onCombatTurnChange);

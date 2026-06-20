@@ -2,17 +2,33 @@
   "id": "foundry-automation",
   "title": "FoundryAutomation",
   "description": "Automated combat features for Nisras the Barbarian: Rage, Reckless Attack, Brutal Strike, Frenzy, Forceful Blow, Hamstring Blow.",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "compatibility": {
     "minimum": "13",
     "verified": "14"
   },
   "authors": [
-    { "name": "Kijan" }
+    {
+      "name": "Kijan"
+    }
   ],
   "scripts": [
     "scripts/main.js"
   ],
+  "relationships": {
+    "requires": [
+      {
+        "id": "midi-qol",
+        "type": "module",
+        "reason": "Stellt die Workflow-Hooks (preItemRoll, DamageRollComplete) bereit, auf denen das Modul aufbaut."
+      },
+      {
+        "id": "dae",
+        "type": "module",
+        "reason": "Wird für die Active Effects (Brutal Strike Schaden, noAdvantage, Special Durations) benötigt."
+      }
+    ]
+  },
   "manifest": "https://raw.githubusercontent.com/Kijan/FoundryAutomation/main/module.json",
   "download": "https://github.com/Kijan/FoundryAutomation/archive/refs/heads/main.zip",
   "languages": [],
