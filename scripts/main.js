@@ -102,35 +102,31 @@ function hasAttackDisadvantageCondition(actor) {
 // Dialoge
 // ============================================================
 
-function askYesNo(title, content) {
-  return new Promise(resolve => {
-    new Dialog({
-      title,
-      content: `<p>${content}</p>`,
-      buttons: {
-        yes: { label: "Ja",   callback: () => resolve(true) },
-        no:  { label: "Nein", callback: () => resolve(false) }
-      },
-      default: "no",
-      close: () => resolve(false)
-    }).render(true);
+async function askYesNo(title, content) {
+  const result = await foundry.applications.api.DialogV2.wait({
+    window: { title },
+    content: `<p>${content}</p>`,
+    buttons: [
+      { action: "yes", label: "Ja",   callback: () => true },
+      { action: "no",  label: "Nein", default: true, callback: () => false }
+    ],
+    rejectClose: false   // bei Schliessen (X/Escape) -> null statt Fehler
   });
+  return result === true;
 }
 
-function askBrutalStrikeEffect() {
-  return new Promise(resolve => {
-    new Dialog({
-      title: "Brutal Strike — Zusatzeffekt",
-      content: `<p>Welchen Brutal Strike Zusatzeffekt möchtest du nutzen?</p>`,
-      buttons: {
-        forceful:  { label: "Forceful Blow",  callback: () => resolve("forceful") },
-        hamstring: { label: "Hamstring Blow", callback: () => resolve("hamstring") },
-        none:      { label: "Keinen",         callback: () => resolve("none") }
-      },
-      default: "none",
-      close: () => resolve("none")
-    }).render(true);
+async function askBrutalStrikeEffect() {
+  const result = await foundry.applications.api.DialogV2.wait({
+    window: { title: "Brutal Strike — Zusatzeffekt" },
+    content: `<p>Welchen Brutal Strike Zusatzeffekt möchtest du nutzen?</p>`,
+    buttons: [
+      { action: "forceful",  label: "Forceful Blow",  callback: () => "forceful" },
+      { action: "hamstring", label: "Hamstring Blow", callback: () => "hamstring" },
+      { action: "none",      label: "Keinen", default: true, callback: () => "none" }
+    ],
+    rejectClose: false
   });
+  return result ?? "none";   // bei Schliessen -> "none"
 }
 
 // ============================================================
@@ -346,5 +342,5 @@ Hooks.once("ready", () => {
   Hooks.on("combatTurnChange",          onCombatTurnChange);
   Hooks.on("renderChatMessageHTML",     onRenderChatMessageHTML);
 
-  console.log(`${MODULE_ID} | v3.1 (feature-basiert) geladen und Hooks registriert`);
+  console.log(`${MODULE_ID} | v3.2 (DialogV2) geladen und Hooks registriert`);
 });

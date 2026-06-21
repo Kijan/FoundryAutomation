@@ -2,7 +2,7 @@
   "id": "foundry-automation",
   "title": "FoundryAutomation",
   "description": "Combat automation for Barbarians: Rage, Reckless Attack, Brutal Strike, Frenzy, Forceful Blow, Hamstring Blow.",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "compatibility": {
     "minimum": "13",
     "verified": "14"
